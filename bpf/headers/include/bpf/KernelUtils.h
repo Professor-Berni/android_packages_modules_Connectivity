@@ -51,7 +51,8 @@ static inline bool isKernelVersion(unsigned major, unsigned minor) {
 }
 
 static inline bool __unused isLtsKernel() {
-    return isKernelVersion(4,  4) ||  // minimum for Android R
+    return isKernelVersion(3, 10) ||  // (2025-02-15 BT for my suzuran)
+           isKernelVersion(4,  4) ||  // minimum for Android R
            isKernelVersion(4,  9) ||  // minimum for Android S & T
            isKernelVersion(4, 14) ||  // minimum for Android U
            isKernelVersion(4, 19) ||  // minimum for Android V

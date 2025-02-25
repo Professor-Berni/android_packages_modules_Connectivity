@@ -1410,6 +1410,7 @@ static int doLoad(char** argv, char * const envp[]) {
     const bool isAtLeastU = (effective_api_level >= __ANDROID_API_U__);
     const bool isAtLeastV = (effective_api_level >= __ANDROID_API_V__);
     const bool isAtLeastW = (effective_api_level >  __ANDROID_API_V__);  // TODO: switch to W
+    bool failed = false;
 
     const int first_api_level = GetIntProperty("ro.board.first_api_level", effective_api_level);
 
@@ -1451,17 +1452,20 @@ static int doLoad(char** argv, char * const envp[]) {
     // both S and T require kernel 4.9 (and eBpf support)
     if (isAtLeastT && !isAtLeastKernelVersion(4, 9, 0)) {
         ALOGW("Android T requires kernel 4.9.");
+        failed = true;
     }
 
     // U bumps the kernel requirement up to 4.14
     if (isAtLeastU && !isAtLeastKernelVersion(4, 14, 0)) {
         ALOGW("Android U requires kernel 4.14.");
+        failed = true;
     }
 
     // V bumps the kernel requirement up to 4.19
     // see also: //system/netd/tests/kernel_test.cpp TestKernel419
     if (isAtLeastV && !isAtLeastKernelVersion(4, 19, 0)) {
         ALOGW("Android V requires kernel 4.19.");
+        failed = true;
     }
 
     // Technically already required by U, but only enforce on V+
@@ -1548,24 +1552,24 @@ static int doLoad(char** argv, char * const envp[]) {
             ALOGW("[Arm KernelUpRev] 32-bit userspace unsupported on 6.2+ kernels.");
         } else if (isArm()) {
             ALOGE("[Arm] 64-bit userspace required on 6.2+ kernels (%d).", first_api_level);
-            return 1;
+            failed = true;
         } else { // x86 since RiscV cannot be 32-bit
             ALOGE("[x86] 64-bit userspace required on 6.2+ kernels.");
-            return 1;
+            failed = true;
         }
     }
 
     // Note: 6.6 is highest version supported by Android V (sdk=35), so this is for sdk=36+
     if (isUserspace32bit() && isAtLeastKernelVersion(6, 7, 0)) {
         ALOGE("64-bit userspace required on 6.7+ kernels.");
-        return 1;
+        failed = true;
     }
 
     // Ensure we can determine the Android build type.
     if (!isEng() && !isUser() && !isUserdebug()) {
         ALOGE("Failed to determine the build type: got %s, want 'eng', 'user', or 'userdebug'",
               getBuildType().c_str());
-        return 1;
+        failed = true;
     }
 
     if (runningAsRoot) {
@@ -1575,8 +1579,7 @@ static int doLoad(char** argv, char * const envp[]) {
         // but we need 0 (enabled)
         // (this writeFile is known to fail on at least 4.19, but always defaults to 0 on
         // pre-5.13, on 5.13+ it depends on CONFIG_BPF_UNPRIV_DEFAULT_OFF)
-        if (writeProcSysFile("/proc/sys/kernel/unprivileged_bpf_disabled", "0\n") &&
-            isAtLeastKernelVersion(5, 13, 0)) return 1;
+        writeProcSysFile("/proc/sys/kernel/unprivileged_bpf_disabled", "0\n");
     }
 
     if (isAtLeastU) {
@@ -1591,14 +1594,12 @@ static int doLoad(char** argv, char * const envp[]) {
         //  kernel does not have CONFIG_BPF_JIT=y)
         // BPF_JIT is required by R VINTF (which means 4.14/4.19/5.4 kernels),
         // but 4.14/4.19 were released with P & Q, and only 5.4 is new in R+.
-        if (writeProcSysFile("/proc/sys/net/core/bpf_jit_enable", "1\n") &&
-            android::bpf::isAtLeastKernelVersion(4, 14, 0)) return 1;
+        writeProcSysFile("/proc/sys/net/core/bpf_jit_enable", "1\n");
 
         // Enable JIT kallsyms export for privileged users only
         // (Note: this (open) will fail with ENOENT 'No such file or directory' if
         //  kernel does not have CONFIG_HAVE_EBPF_JIT=y)
-        if (writeProcSysFile("/proc/sys/net/core/bpf_jit_kallsyms", "1\n") &&
-            android::bpf::isAtLeastKernelVersion(4, 14, 0)) return 1;
+        writeProcSysFile("/proc/sys/net/core/bpf_jit_kallsyms", "1\n");
     }
 
     // Create all the pin subdirectories
@@ -1606,7 +1607,7 @@ static int doLoad(char** argv, char * const envp[]) {
     //  which could otherwise fail with ENOENT during object pinning or renaming,
     //  due to ordering issues)
     for (const auto& location : locations) {
-        if (createSysFsBpfSubDir(location.prefix)) return 1;
+        if (createSysFsBpfSubDir(location.prefix) != 0) failed = true;
     }
 
     // Note: there's no actual src dir for fs_bpf_loader .o's,
@@ -1614,32 +1615,31 @@ static int doLoad(char** argv, char * const envp[]) {
     // This is because this is primarily meant for triggering genfscon rules,
     // and as such this will likely always be the case.
     // Thus we need to manually create the /sys/fs/bpf/loader subdirectory.
-    if (createSysFsBpfSubDir("loader")) return 1;
+    if (createSysFsBpfSubDir("loader") == 0) {
+        return true;
+    } else {
+        failed = true;
+    }
 
     // Load all ELF objects, create programs and maps, and pin them
     for (const auto& location : locations) {
-        if (loadAllElfObjects(bpfloader_ver, location) != 0) {
-            ALOGE("=== CRITICAL FAILURE LOADING BPF PROGRAMS FROM %s ===", location.dir);
-            ALOGE("If this triggers reliably, you're probably missing kernel options or patches.");
-            ALOGE("If this triggers randomly, you might be hitting some memory allocation "
-                  "problems or startup script race.");
-            ALOGE("--- DO NOT EXPECT SYSTEM TO BOOT SUCCESSFULLY ---");
-            sleep(20);
-            return 2;
-        }
-    }
-
-    int key = 1;
-    int value = 123;
-    unique_fd map(
-            createMap(BPF_MAP_TYPE_ARRAY, sizeof(key), sizeof(value), 2, 0));
-    if (writeToMapEntry(map, &key, &value, BPF_ANY)) {
-        ALOGE("Critical kernel bug - failure to write into index 1 of 2 element bpf map array.");
-        return 1;
+        if (loadAllElfObjects(bpfloader_ver, location) != 0) failed = true;
     }
 
     // leave a flag that we're done
-    if (createSysFsBpfSubDir("netd_shared/mainline_done")) return 1;
+    if (createSysFsBpfSubDir("netd_shared/mainline_done") == 0) {
+        return 1;
+    } else {
+        failed = true;
+    }
+
+    if (failed) {
+        ALOGE("=== CRITICAL FAILURE LOADING BPF PROGRAMS ===");
+        ALOGE("If this triggers reliably, you're probably missing kernel options or patches.");
+        ALOGE("If this triggers randomly, you might be hitting some memory allocation "
+                "problems or startup script race.");
+        ALOGE("--- DO NOT EXPECT SYSTEM TO BOOT SUCCESSFULLY ---");
+     }
 
     // platform bpfloader will only succeed when run as root
     if (!runningAsRoot) {

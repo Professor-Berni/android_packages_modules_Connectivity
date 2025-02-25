@@ -212,6 +212,8 @@ public class BpfNetMapsUtils {
     public static boolean isChainEnabled(
             final IBpfMap<S32, U32> configurationMap, final int chain) {
         throwIfPreT("isChainEnabled is not available on pre-T devices");
+        
+        if (configurationMap == null) return false;
 
         final long match = getMatchByFirewallChain(chain);
         try {
@@ -237,6 +239,8 @@ public class BpfNetMapsUtils {
     public static int getUidRule(final IBpfMap<S32, UidOwnerValue> uidOwnerMap,
             final int chain, final int uid) {
         throwIfPreT("getUidRule is not available on pre-T devices");
+        
+        if (uidOwnerMap == null) return FIREWALL_RULE_ALLOW;
 
         final long match = getMatchByFirewallChain(chain);
         final boolean isAllowList = isFirewallAllowList(chain);
@@ -336,6 +340,8 @@ public class BpfNetMapsUtils {
             IBpfMap<S32, U8> dataSaverEnabledMap
     ) {
         throwIfPreT("isUidBlockedByFirewallChains is not available on pre-T devices");
+        
+        if (configurationMap == null) return false;
 
         final int blockedReasons = getUidNetworkingBlockedReasons(
                 uid,
@@ -364,6 +370,8 @@ public class BpfNetMapsUtils {
      */
     public static boolean getDataSaverEnabled(IBpfMap<S32, U8> dataSaverEnabledMap) {
         throwIfPreT("getDataSaverEnabled is not available on pre-T devices");
+        
+        if (dataSaverEnabledMap == null) return false;
 
         try {
             return dataSaverEnabledMap.getValue(DATA_SAVER_ENABLED_KEY).val == DATA_SAVER_ENABLED;
