@@ -1607,7 +1607,7 @@ static int doLoad(char** argv, char * const envp[]) {
     //  which could otherwise fail with ENOENT during object pinning or renaming,
     //  due to ordering issues)
     for (const auto& location : locations) {
-        if (createSysFsBpfSubDir(location.prefix) != 0) failed = true;
+        if (createSysFsBpfSubDir(location.prefix)) goto fail;
     }
 
     // Note: there's no actual src dir for fs_bpf_loader .o's,
@@ -1615,31 +1615,23 @@ static int doLoad(char** argv, char * const envp[]) {
     // This is because this is primarily meant for triggering genfscon rules,
     // and as such this will likely always be the case.
     // Thus we need to manually create the /sys/fs/bpf/loader subdirectory.
-    if (createSysFsBpfSubDir("loader") == 0) {
-        return true;
-    } else {
-        failed = true;
-    }
+    if (createSysFsBpfSubDir("loader")) goto fail;
 
     // Load all ELF objects, create programs and maps, and pin them
     for (const auto& location : locations) {
-        if (loadAllElfObjects(bpfloader_ver, location) != 0) failed = true;
+        if (loadAllElfObjects(bpfloader_ver, location)) goto fail;
     }
 
     // leave a flag that we're done
-    if (createSysFsBpfSubDir("netd_shared/mainline_done") == 0) {
-        return 1;
-    } else {
-        failed = true;
-    }
+    if (createSysFsBpfSubDir("netd_shared/mainline_done")) goto fail;
 
-    if (failed) {
-        ALOGE("=== CRITICAL FAILURE LOADING BPF PROGRAMS ===");
-        ALOGE("If this triggers reliably, you're probably missing kernel options or patches.");
-        ALOGE("If this triggers randomly, you might be hitting some memory allocation "
-                "problems or startup script race.");
-        ALOGE("--- DO NOT EXPECT SYSTEM TO BOOT SUCCESSFULLY ---");
-     }
+fail:
+    ALOGE("=== CRITICAL FAILURE LOADING BPF PROGRAMS ===");
+    ALOGE("If this triggers reliably, you're probably missing kernel options or patches.");
+    ALOGE("If this triggers randomly, you might be hitting some memory allocation "
+          "problems or startup script race.");
+    ALOGE("--- DO NOT EXPECT SYSTEM TO BOOT SUCCESSFULLY ---");
+    return 1;
 
     // platform bpfloader will only succeed when run as root
     if (!runningAsRoot) {
