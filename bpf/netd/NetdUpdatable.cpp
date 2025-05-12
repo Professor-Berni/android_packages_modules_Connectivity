@@ -30,7 +30,7 @@ int libnetd_updatable_init(const char* cg2_path) {
     android::base::InitLogging(/*argv=*/nullptr);
     LOG(INFO) << __func__ << ": Initializing";
     char value[PROP_VALUE_MAX] = "";
-    bool ebpf_supported = __system_property_get("ro.kernel.ebpf.supported", value) != 0 || strcmp(value, "false") == 0;
+    bool ebpf_supported = ((__system_property_get("ro.kernel.ebpf.supported", value) != 0) && (strcmp(value, "true") == 0));
     if (ebpf_supported) {
         android::netdutils::Status ret = sBpfHandler.init(cg2_path);
         if (!android::netdutils::isOk(ret)) {
